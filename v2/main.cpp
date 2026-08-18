@@ -200,7 +200,14 @@ public:
         // Too small => cannot follow fast motion.
         searchRadius = std::max(10, std::min(48, t / 2 + 10));
     }
+    int dynamicSearchRadius(const cv::Size &sz) const
+    {
+        // Larger search window for motion.
+        int r = std::max(searchRadius,
+                         static_cast<int>(frameDiag(sz) * 0.07));
 
+        return std::min(220, r);
+    }
     void reset()
     {
         initialized = false;
@@ -255,11 +262,13 @@ public:
             predicted = predictCorners(dt);
 
         // If we are not initialized, or we have been unstable, allow full contour reacquire.
-        bool canReacquire = (!initialized || framesLost > 6 || confidence < 0.25);
+      //  bool canReacquire = (!initialized || framesLost > 6 || confidence < 0.25);
+
+        bool canReacquire = (!initialized || framesLost > 3 || confidence < 0.35);
 
         if (canReacquire && detected) {
             const std::vector<cv::Point2f> *expected =
-                initialized ? &predicted : nullptr;
+                (initialized && framesLost <= 2) ? &predicted : nullptr;
 
             if (validateQuad(detectedQuad, bgr.size(), p.minArea, expected)) {
                 initFromCorners(detectedQuad);
@@ -308,8 +317,8 @@ public:
                                                inliers);
 
             int inlierCount = inliers.empty() ? 0 : cv::countNonZero(inliers);
-            int minInliers = std::max(6, static_cast<int>(0.30 * pairs));
-
+    //        int minInliers = std::max(6, static_cast<int>(0.30 * pairs));
+int minInliers = std::max(6, static_cast<int>(0.18 * pairs));
             if (!Hcand.empty() && inlierCount >= minInliers) {
                 cv::Mat Hs2c = Hcand.inv();
 
@@ -317,7 +326,8 @@ public:
                 cv::perspectiveTransform(screenCorners, cand, Hs2c);
 
                 double diag = frameDiag(bgr.size());
-                double maxJump = 0.45 * diag * std::max(1.0f, dt);
+                //double maxJump = 0.45 * diag * std::max(1.0f, dt);
+                double maxJump = 1.0 * frameDiag(bgr.size()) * std::max(1.0f, dt);
 
                 if (validCorners(cand, bgr.size()) &&
                     cornersNear(cand, predicted, maxJump)) {
@@ -335,10 +345,14 @@ public:
 
         // If edge tracking failed, but normal contour detection is near predicted state,
         // snap to the detected contour.
-        if (detected &&
-            validateQuad(detectedQuad, bgr.size(), p.minArea, &predicted)) {
-            initFromCorners(detectedQuad);
-            return isValid();
+        if (detected) {
+            const std::vector<cv::Point2f> *expected =
+                (framesLost <= 1) ? &predicted : nullptr;
+
+            if (validateQuad(detectedQuad, bgr.size(), p.minArea, expected)) {
+                initFromCorners(detectedQuad);
+                return isValid();
+            }
         }
 
         // Failed this frame: coast using velocity for a short time.
@@ -369,10 +383,12 @@ private:
     double confidence = 0.0;
 
     int framesLost = 0;
-    int maxLost = 12;
+    int maxLost = 22; //12 20
 
-    int searchRadius = 26;
-    int samplesPerEdge = 14;
+    int searchRadius = 76;  //26  20 16
+    int samplesPerEdge = 24; //14  24
+    float response = 0.82f;
+
 
     void initFromCorners(const std::vector<cv::Point2f> &camQuad)
     {
@@ -413,8 +429,8 @@ private:
             smoothed = cand;
             velocity.assign(4, cv::Point2f(0.0f, 0.0f));
         } else {
-            const float alpha = 0.55f;
-
+         //   const float alpha = 0.55f;
+const float alpha = response;
             for (int i = 0; i < 4; ++i) {
                 smoothed[i] = alpha * cand[i] +
                               (1.0f - alpha) * predicted[i];
@@ -556,7 +572,7 @@ private:
             cv::Point2f c1 = centroid(quad);
             cv::Point2f c2 = centroid(*expected);
 
-            if (cv::norm(c1 - c2) > 0.50 * diag)
+            if (cv::norm(c1 - c2) > 0.90 * diag)
                 return false;
 
             double avgCornerDist = 0.0;
@@ -566,7 +582,7 @@ private:
 
             avgCornerDist /= 4.0;
 
-            if (avgCornerDist > 0.55 * diag)
+            if (avgCornerDist > 0.95 * diag)
                 return false;
         }
 
@@ -775,7 +791,7 @@ private:
 
         std::vector<cv::Point2f> inwardScreenPts;
         inwardScreenPts.reserve(samples.size());
-
+const int radius = dynamicSearchRadius(sz);
         for (size_t i = 0; i < samples.size(); ++i)
             inwardScreenPts.push_back(samples[i] + inwardScreen[i]);
 
@@ -808,7 +824,7 @@ private:
                               mask,
                               camSamples[i],
                               dir,
-                              searchRadius,
+                              radius,
                               sz,
                               q,
                               mode)) {
